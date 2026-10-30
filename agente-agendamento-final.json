@@ -1,0 +1,906 @@
+{
+  "name": "Agente de Agendamento - Clínica (final)",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "id": "sticky1",
+      "name": "Nota - Setup",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        40
+      ],
+      "parameters": {
+        "width": 2200,
+        "height": 180,
+        "color": 5,
+        "content": "## Agente de Agendamento\nMesma lógica de buffer/debounce do projeto anterior (filtra evento, junta mensagens no Redis, espera 6s de silêncio). O que muda é o AI Agent: agora usa ferramentas de Postgres em vez de Google Calendar. Rode o schema.sql antes de testar, e cadastre pelo menos 1 profissional na tabela `profissionais`."
+      }
+    },
+    {
+      "id": "webhook1",
+      "name": "Webhook - Evolution API",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "clinica-agendamento",
+        "responseMode": "onReceived",
+        "options": {}
+      }
+    },
+    {
+      "id": "if0",
+      "name": "IF - É Mensagem?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c0",
+              "leftValue": "={{ $json.body.event }}",
+              "rightValue": "messages.upsert",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "noop0",
+      "name": "NoOp - Ignora Evento",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        440,
+        420
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "code1",
+      "name": "Code - Prepara Dados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst chatId = body?.data?.key?.remoteJid || body?.key?.remoteJid || 'desconhecido';\nconst texto = body?.data?.message?.conversation || body?.message?.conversation || '';\nconst pushName = body?.data?.pushName || body?.pushName || null;\nreturn [{ json: { chatId, texto, pushName, timestamp: Date.now() } }];"
+      }
+    },
+    {
+      "id": "redis1",
+      "name": "Redis - Busca Buffer Atual",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "operation": "get",
+        "key": "={{ 'buffer:' + $json.chatId }}",
+        "options": {}
+      },
+      "credentials": {
+        "redis": {
+          "id": "",
+          "name": "Redis VPS"
+        }
+      }
+    },
+    {
+      "id": "code2",
+      "name": "Code - Acrescenta Mensagem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const bufferAtual = $json.propertyName || '';\nconst novaMsg = $('Code - Prepara Dados').item.json.texto;\nconst bufferNovo = bufferAtual ? (bufferAtual + '\\n' + novaMsg) : novaMsg;\nreturn [{ json: {\n  chatId: $('Code - Prepara Dados').item.json.chatId,\n  buffer: bufferNovo,\n  timestamp: $('Code - Prepara Dados').item.json.timestamp\n} }];"
+      }
+    },
+    {
+      "id": "redis2",
+      "name": "Redis - Salva Buffer",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        300
+      ],
+      "parameters": {
+        "operation": "set",
+        "key": "={{ 'buffer:' + $json.chatId }}",
+        "value": "={{ $json.buffer }}",
+        "options": {}
+      },
+      "credentials": {
+        "redis": {
+          "id": "",
+          "name": "Redis VPS"
+        }
+      }
+    },
+    {
+      "id": "redis3",
+      "name": "Redis - Set Timestamp",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        300
+      ],
+      "parameters": {
+        "operation": "set",
+        "key": "={{ 'last_seen:' + $('Code - Acrescenta Mensagem').item.json.chatId }}",
+        "value": "={{ $('Code - Acrescenta Mensagem').item.json.timestamp.toString() }}",
+        "options": {}
+      },
+      "credentials": {
+        "redis": {
+          "id": "",
+          "name": "Redis VPS"
+        }
+      }
+    },
+    {
+      "id": "wait1",
+      "name": "Wait 6s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        300
+      ],
+      "parameters": {
+        "amount": 6,
+        "unit": "seconds"
+      }
+    },
+    {
+      "id": "redis4",
+      "name": "Redis - Get Timestamp",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        300
+      ],
+      "parameters": {
+        "operation": "get",
+        "key": "={{ 'last_seen:' + $('Code - Prepara Dados').item.json.chatId }}",
+        "options": {}
+      },
+      "credentials": {
+        "redis": {
+          "id": "",
+          "name": "Redis VPS"
+        }
+      }
+    },
+    {
+      "id": "if1",
+      "name": "IF - Mensagem Nova?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.propertyName }}",
+              "rightValue": "={{ $('Code - Prepara Dados').item.json.timestamp.toString() }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "noop1",
+      "name": "NoOp - Para Execução",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        160
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "redis5",
+      "name": "Redis - Busca Buffer Final",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        420
+      ],
+      "parameters": {
+        "operation": "get",
+        "key": "={{ 'buffer:' + $('Code - Prepara Dados').item.json.chatId }}",
+        "options": {}
+      },
+      "credentials": {
+        "redis": {
+          "id": "",
+          "name": "Redis VPS"
+        }
+      }
+    },
+    {
+      "id": "redis6",
+      "name": "Redis - Limpa Buffer",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        420
+      ],
+      "parameters": {
+        "operation": "delete",
+        "key": "={{ 'buffer:' + $('Code - Prepara Dados').item.json.chatId }}",
+        "options": {}
+      },
+      "credentials": {
+        "redis": {
+          "id": "",
+          "name": "Redis VPS"
+        }
+      }
+    },
+    {
+      "id": "sticky2",
+      "name": "Nota - Ferramentas",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        40
+      ],
+      "parameters": {
+        "width": 1300,
+        "height": 260,
+        "color": 4,
+        "content": "## AI Agent: Postgres + Google Calendar (versão final)\nFerramentas identificadas pelo NOME do profissional (sem UUID). Calendário fixo em 'primary'.\nRode antes: schema.sql, migration_google_calendar.sql e o índice único (uq_agendamento_horario).\nSem Retry On Fail no Agent: use Enable Fallback Model se quiser resiliência."
+      }
+    },
+    {
+      "id": "agent1",
+      "name": "AI Agent - Agendamento",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        2640,
+        420
+      ],
+      "retryOnFail": false,
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Redis - Busca Buffer Final').item.json.propertyName }}",
+        "options": {
+          "systemMessage": "=Você é o assistente de agendamento de uma clínica/salão, atendendo pelo WhatsApp.\nUse SOMENTE estas ferramentas, com o nome exatamente assim: listar_profissionais, consultar_agendamentos, verificar_disponibilidade, criar_agendamento, cancelar_agendamento, cadastrar_cliente, criar_evento_google, salvar_id_evento, deletar_evento_google.\nOs profissionais são identificados pelo NOME (ex: Carlos), nunca por número ou ID.\n\nREGRAS:\n1) Se não souber os nomes disponíveis, chame listar_profissionais.\n2) Antes de criar, chame verificar_disponibilidade. Nunca diga que um horário está ocupado sem ter chamado essa ferramenta nesta conversa. Se retornar ocupado = true, avise e sugira outro horário próximo; se retornar ocupado = false, o horário está livre: prossiga para criar.\n3) Se o cliente se apresentar e ainda não estiver cadastrado, chame cadastrar_cliente. Se criar_agendamento não retornar nada, cadastre o cliente e tente de novo.\n4) PARA CRIAR: verificar_disponibilidade, criar_agendamento, criar_evento_google (título \"Consulta - <nome do cliente>\", duração de 1 hora), salvar_id_evento (com o id do agendamento e o id do evento). Só confirme ao cliente depois dos quatro passos.\n5) PARA CANCELAR: consultar_agendamentos, cancelar_agendamento e, se houver google_event_id, deletar_evento_google.\n6) Se criar_agendamento retornar erro, o horário acabou de ser ocupado: avise o cliente e sugira outro.\n7) Hoje é {{ $now.setZone('America/Sao_Paulo').setLocale('pt-BR').toFormat('cccc, yyyy-MM-dd') }}, fuso de Brasília. Use isso para datas relativas.\n8) Responda sempre em português, breve e simpático, confirmando o que foi feito."
+        }
+      }
+    },
+    {
+      "id": "gemini1",
+      "name": "Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        2460,
+        650
+      ],
+      "parameters": {
+        "modelName": "models/gemini-3.6-flash",
+        "options": {}
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "",
+          "name": "Gemini API"
+        }
+      }
+    },
+    {
+      "id": "memory1",
+      "name": "Postgres Chat Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.1,
+      "position": [
+        2580,
+        650
+      ],
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Code - Prepara Dados').item.json.chatId }}",
+        "tableName": "n8n_chat_histories",
+        "contextWindowLength": 10
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres VPS"
+        }
+      }
+    },
+    {
+      "id": "tool1",
+      "name": "listar_profissionais",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.5,
+      "position": [
+        2700,
+        650
+      ],
+      "parameters": {
+        "toolDescription": "Lista os profissionais ativos (nome e especialidade). Use para saber quem existe e como o nome está escrito.",
+        "operation": "executeQuery",
+        "query": "SELECT nome, especialidade FROM profissionais WHERE ativo = true;"
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres VPS"
+        }
+      }
+    },
+    {
+      "id": "tool2",
+      "name": "consultar_agendamentos",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.5,
+      "position": [
+        2840,
+        650
+      ],
+      "parameters": {
+        "toolDescription": "Consulta os agendamentos futuros do cliente atual (não cancelados).",
+        "operation": "executeQuery",
+        "query": "SELECT a.id, a.data_hora, a.status, a.google_event_id, p.nome AS profissional, p.google_calendar_id FROM agendamentos a JOIN profissionais p ON p.id = a.profissional_id JOIN clientes c ON c.id = a.cliente_id WHERE c.telefone = $1 AND a.data_hora >= now() AND a.status != 'cancelado' ORDER BY a.data_hora;",
+        "options": {
+          "queryReplacement": "={{ $('Code - Prepara Dados').item.json.chatId }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres VPS"
+        }
+      }
+    },
+    {
+      "id": "tool3",
+      "name": "verificar_disponibilidade",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.5,
+      "position": [
+        2980,
+        650
+      ],
+      "parameters": {
+        "toolDescription": "Verifica se o profissional já tem agendamento naquele horário. Retorna ocupado = true (horário ocupado) ou ocupado = false (livre).",
+        "operation": "executeQuery",
+        "query": "SELECT EXISTS (SELECT 1 FROM agendamentos a JOIN profissionais p ON p.id = a.profissional_id WHERE p.nome ILIKE '%' || $1 || '%' AND a.data_hora = $2::timestamptz AND a.status <> 'cancelado') AS ocupado;",
+        "options": {
+          "queryReplacement": "={{ [ $fromAI('profissional_nome', 'Nome do profissional, ex: Carlos'), $fromAI('data_hora', 'Data e hora, ISO com fuso -03:00, ex: 2026-10-17T10:00:00-03:00') ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres VPS"
+        }
+      }
+    },
+    {
+      "id": "tool4",
+      "name": "criar_agendamento",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.5,
+      "position": [
+        3120,
+        650
+      ],
+      "parameters": {
+        "toolDescription": "Cria o agendamento no banco. Só use depois de verificar_disponibilidade retornar ocupado = false. O cliente precisa estar cadastrado. Retorna o id do agendamento; se não retornar linha, o cliente não está cadastrado ou o nome do profissional não foi encontrado.",
+        "operation": "executeQuery",
+        "query": "INSERT INTO agendamentos (cliente_id, profissional_id, data_hora, status) SELECT cl.id, p.id, $3::timestamptz, 'agendado' FROM clientes cl, profissionais p WHERE cl.telefone = $1 AND p.nome ILIKE '%' || $2 || '%' AND p.ativo = true LIMIT 1 RETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ $('Code - Prepara Dados').item.json.chatId, $fromAI('profissional_nome', 'Nome do profissional, ex: Carlos'), $fromAI('data_hora', 'Data e hora, ISO com fuso -03:00') ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres VPS"
+        }
+      }
+    },
+    {
+      "id": "tool5",
+      "name": "cancelar_agendamento",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.5,
+      "position": [
+        3260,
+        650
+      ],
+      "parameters": {
+        "toolDescription": "Cancela um agendamento pelo ID (obtido via consulta prévia). Devolve google_event_id e google_calendar_id: use-os logo depois na ferramenta de deletar evento do Google Calendar.",
+        "operation": "executeQuery",
+        "query": "UPDATE agendamentos a SET status = 'cancelado' FROM profissionais p WHERE a.id = $1 AND p.id = a.profissional_id RETURNING a.id, a.google_event_id, p.google_calendar_id;",
+        "options": {
+          "queryReplacement": "={{ $fromAI('agendamento_id', 'ID do agendamento a cancelar') }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres VPS"
+        }
+      }
+    },
+    {
+      "id": "tool6",
+      "name": "cadastrar_cliente",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.5,
+      "position": [
+        3400,
+        650
+      ],
+      "parameters": {
+        "toolDescription": "Cadastra ou atualiza o nome do cliente atual, se ele se apresentar.",
+        "operation": "executeQuery",
+        "query": "INSERT INTO clientes (telefone, nome) VALUES ($1, $2) ON CONFLICT (telefone) DO UPDATE SET nome = EXCLUDED.nome RETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ $('Code - Prepara Dados').item.json.chatId, $fromAI('nome', 'Nome do cliente') ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres VPS"
+        }
+      }
+    },
+    {
+      "id": "http1",
+      "name": "HTTP Request - Envia Resposta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        420
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://SEU-DOMINIO-EVOLUTION/message/sendText/SUA_INSTANCIA",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "SUA_API_KEY_EVOLUTION"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "number",
+              "value": "={{ $('Code - Prepara Dados').item.json.chatId }}"
+            },
+            {
+              "name": "text",
+              "value": "={{ $json.output }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "tool7",
+      "name": "criar_evento_google",
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.2,
+      "position": [
+        3540,
+        650
+      ],
+      "parameters": {
+        "toolDescription": "Cria o evento no Google Calendar logo depois de criar_agendamento. Devolve o ID do evento.",
+        "resource": "event",
+        "operation": "create",
+        "calendar": {
+          "mode": "id",
+          "value": "primary"
+        },
+        "start": "={{ $fromAI('inicio', 'Início do evento, ISO com fuso -03:00') }}",
+        "end": "={{ $fromAI('fim', 'Fim do evento, ISO com fuso -03:00; use 1 hora após o início se não houver duração') }}",
+        "additionalFields": {
+          "summary": "={{ $fromAI('titulo', 'Título, ex: Consulta - Nome do cliente') }}"
+        }
+      },
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "",
+          "name": "Google Calendar"
+        }
+      }
+    },
+    {
+      "id": "tool8",
+      "name": "salvar_id_evento",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.5,
+      "position": [
+        3680,
+        650
+      ],
+      "parameters": {
+        "toolDescription": "Salva no agendamento o ID do evento criado no Google Calendar, para poder cancelar depois.",
+        "operation": "executeQuery",
+        "query": "UPDATE agendamentos SET google_event_id = $2 WHERE id = $1 RETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ $fromAI('agendamento_id', 'ID do agendamento'), $fromAI('google_event_id', 'ID do evento no Google Calendar') ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "",
+          "name": "Postgres VPS"
+        }
+      }
+    },
+    {
+      "id": "tool9",
+      "name": "deletar_evento_google",
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.2,
+      "position": [
+        3820,
+        650
+      ],
+      "parameters": {
+        "toolDescription": "Apaga o evento do Google Calendar depois de cancelar o agendamento no banco. Se o agendamento não tiver google_event_id, não use esta ferramenta.",
+        "resource": "event",
+        "operation": "delete",
+        "calendar": {
+          "mode": "id",
+          "value": "primary"
+        },
+        "eventId": "={{ $fromAI('google_event_id', 'ID do evento no Google Calendar') }}"
+      },
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "",
+          "name": "Google Calendar"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook - Evolution API": {
+      "main": [
+        [
+          {
+            "node": "IF - É Mensagem?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - É Mensagem?": {
+      "main": [
+        [
+          {
+            "node": "Code - Prepara Dados",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "NoOp - Ignora Evento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Prepara Dados": {
+      "main": [
+        [
+          {
+            "node": "Redis - Busca Buffer Atual",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis - Busca Buffer Atual": {
+      "main": [
+        [
+          {
+            "node": "Code - Acrescenta Mensagem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Acrescenta Mensagem": {
+      "main": [
+        [
+          {
+            "node": "Redis - Salva Buffer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis - Salva Buffer": {
+      "main": [
+        [
+          {
+            "node": "Redis - Set Timestamp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis - Set Timestamp": {
+      "main": [
+        [
+          {
+            "node": "Wait 6s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 6s": {
+      "main": [
+        [
+          {
+            "node": "Redis - Get Timestamp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis - Get Timestamp": {
+      "main": [
+        [
+          {
+            "node": "IF - Mensagem Nova?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Mensagem Nova?": {
+      "main": [
+        [
+          {
+            "node": "NoOp - Para Execução",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Redis - Busca Buffer Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis - Busca Buffer Final": {
+      "main": [
+        [
+          {
+            "node": "Redis - Limpa Buffer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Redis - Limpa Buffer": {
+      "main": [
+        [
+          {
+            "node": "AI Agent - Agendamento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent - Agendamento",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent - Agendamento",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "listar_profissionais": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent - Agendamento",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "consultar_agendamentos": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent - Agendamento",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "verificar_disponibilidade": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent - Agendamento",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "criar_agendamento": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent - Agendamento",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "cancelar_agendamento": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent - Agendamento",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "cadastrar_cliente": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent - Agendamento",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent - Agendamento": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request - Envia Resposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "criar_evento_google": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent - Agendamento",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "salvar_id_evento": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent - Agendamento",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deletar_evento_google": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent - Agendamento",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
